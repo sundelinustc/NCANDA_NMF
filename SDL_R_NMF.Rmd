@@ -1,0 +1,667 @@
+---
+title: "SDL_R_NMF"
+author: "Delin Sun"
+date: "6/25/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+Statistical analyses of the NMF outputs (7/9/15-components solutions by Viraj) of cortical thickness data from NCANDA binge drinking project
+
+Delin Sun
+Version date 07/30/2020.
+
+### Independent Variables
+
+Drinking_class: Severity of drinking problem. 0 = no/to low drinkers, 1 = medium drinkers, 2= heavy drinkers, 3 = heavy drinker + binge. We can also combine 2 and 3 as heavy drinking.
+
+Age_d: The difference between a subject’s age at each scan and their mean age across individual timepoints (i.e. scan_age - subject_mean_age).
+
+Age_m: the difference between a subject’s mean age across visits and the mean age of the entire sample across timepoints (i.e. subject_mean_age - mean(subject_mean_age)), thus centering cohort age at the sample mean. Each participant’s cohort age remained constant across timepoints. 
+
+life_trauma_RP: Cumulative trauma at baseline. It was quantified as the sum of reported DSM-IV or 5 Criterion A traumatic events of trauma history. DSM Criterion A traumas and PTSD symptoms were collected as part of the baseline assessment from the youth, and parent with the Computerized Semi-Structured Assessment for the Genetics of Alcoholism (SSAGA) (Bucholz, Cadoret et al. 1994, Hesselbrock, Easton et al. 1999). The SSAGA was modified for adolescents and includes an interview assessment of DSM-IV and 5 Axis I disorders, DSM Criterion A traumas and PTSD interview questions (Brown, Brumback et al. 2015). A traumatic event was counted once if either the parent and/or youth reported an event. No participant met DSM criteria for PTSD. Its range is 0~5. We can combine 4 and 5 as a group.
+
+Fh_alc_density: Family history of alcohol use and dependence (AUD) density. It was calculated based on the presence of AUD in first and second-degree relatives (Rice, Reich et al. 1995). Its range is 0~4.
+
+Ses: Socio economic status quantified using the highest parental years of education of either parent (Brown, Myers et al. 1998). The range is 6~20 yrs. We can categorize 0 = 6~12 yrs (high school or less), 1 = 13~15 yrs (associate), 2 = 16 yrs (BA, BS), 3 = 16 plus yrs (masters or higher). Or we can do 0 = 6~12 yrs, 1 = 13~20 yrs.
+
+Race: Self-identified race/ethnicity instead of “race”. Totally 3 categories: African-American/Black (AAmer), Caucasian/White (Cauc), and Other.
+
+Sex: Male and Female.
+
+Subject: Participant ID as a random effect variable.
+
+
+## Set path and load packages
+```{r,echo=FALSE,warning=FALSE,include=FALSE}
+#setwd("C:/Users/sunde/Documents/Projects/Viraj/baseline_nmf_glm_analysis")
+library("readxl") # load .xls or .xlsx files
+library(tidyverse) # for data manipulation
+library(psych)
+library(lme4) # lm/lmer models
+library(lmerTest)# p-value that are not included in lme4
+library(ggplot2)
+library(sjPlot) # plot interactions of lm/lmer outputs
+library(ggpubr) # plot multiple panels
+library(plot.matrix)
+```
+
+## Define functions
+Totally 4 functions
+--- SDL_lm, extract models/coefficients/p values/plots for each component
+Already cleaned by Viraj's Matlab scripts
+--- SDL_heat, heatmap of p values across factors and componnets
+--- SDL_plt,  plot multiple main/interaction effects
+--- SDL_all,  call the above 3 functions
+```{r,echo=FALSE}
+
+#######################################################################
+# a function to model (lm/lmer/glm) data for each ROI, and extract models/coefficients/p-values of models
+# Input
+# --- y, dataframe column, e.g. df$col01, or select(col1:col10)
+# --- df, dataframe
+# --- Otype, the type of outputs, e.g. "model", "coef", and "p"
+# --- ftxt, text for the formula, e.g. "lmer(formula = y ~ age_d + age_m + drinking_class + sex + race_label + ses + fh_alc_density + life_trauma_RP + (1|subject)"
+# --- fterms, which factor to be plotted
+# --- fxy, x and y labels
+# Output
+# --- model, list of models
+# --- coef,  matrix of coefficients
+# --- pval,  matrix of coefficients
+# --- plt,   list of plotting objects
+SDL_lm <- function(y,df,Otype,ftxt,fterms=NULL,fxy=NULL){
+  model <- eval(parse(text=paste(substr(ftxt,1,nchar(ftxt)-1),", data = df)")))
+  coef  <- model %>% summary() %>% coefficients()
+  pval  <- coef  %>% .[,"Pr(>|t|)"]
+  plt   <- model %>% plot_model(type = "pred", terms = fterms, title = "", axis.title = fxy)
+  switch(Otype,"model"=return(model),"coef"=return(list(coef)),"pval"=return(pval),"plt"=return(list(plt)))
+}
+##############################################################################
+
+##############################################################################
+# A function to plot the heatmap of statistical significance across factors and components
+# Input
+# --- Pval, p-value matrix
+# Output
+# --- a heatmap of statistical significance
+SDL_heat <- function(Pval){
+  heatmap(Pval, margins =c(7,10), Colv=NA, Rowv=NA, main="p-values", scale="none", breaks=c(0,0.001,0.01,0.05,1), col=c('yellow','orange','red','grey')) # no color bar
+}
+##############################################################################
+
+##############################################################################
+# A function to plot the significant main and interaction effects
+# Input
+# --- Plt, plot list made by SDL_lm function
+# --- Pval, p-value matrix made by SDL_lm function
+# --- ffact, the factor used to threshold p-value matrix
+# --- pth, the significance threshold
+# Output
+# --- a heatmap of statistical significance
+SDL_plt <- function(Plt,Pval,ffact='drinking_class',pth=0.05){
+  if (length(which(Pval[ffact,]<pth))){
+  ind <- Pval[ffact,] < pth # index of significant components
+  Plt <- Plt[ind] # remove non-significant components
+  flabel <- colnames(Pval[,ind]) # labels of the significant components
+  ggarrange(plotlist=Plt,labels=flabel,common.legend=T) # multiple plots
+  }else{
+    paste0("NS: ",ffact)
+  }
+}
+##############################################################################
+
+
+
+##############################################################################
+# A function to combining the aforementioned 3 functions
+# Input
+# --- col, column(s) of dependent variables, e.g. df%>%select(c1:c7)
+# --- df, dataframe
+# --- fcorr, the method for correction of multiple comparisons, e.g. 'fdr','bonferroni','none'
+# --- ftxt, lm/lmer/glm formula
+# --- fterms, independent variables
+# --- fxy, plot's x, y labels
+# --- ffact, the factor used to threshold p-value matrix
+# Output
+# --- a heatmap of statistical significance
+SDL_all <- function(col,df,fcorr,ftxt,fterms,fxy,ffact){
+  #get p-value matrix
+  Pval <- col %>% sapply(SDL_lm, df=df, Otype="pval", ftxt=ftxt)  
+  Pval_fdr <- Pval %>% t() %>% as.data.frame() %>% sapply(p.adjust,method=fcorr) %>% t()
+  colnames(Pval_fdr) <- colnames(Pval)
+  
+  # plot significance heatmap
+  Pval_fdr %>% SDL_heat() # show all significant effects (p < 0.05 unc.)
+
+  # plot significant main or interaction effects
+  col %>% sapply(SDL_lm, df=df, Otype="plt", ftxt=ftxt, fterms=fterms, fxy=fxy) %>% SDL_plt(Pval=Pval_fdr,ffact=ffact, pth=0.05) # statistical threshold
+}
+##############################################################################
+
+```
+
+# Data cleaning
+Only employ subjects whose drinking class = 0 at baseline
+
+```{r,echo=FALSE}
+#df0 <- read.csv("Data_cleaned.csv",header=T)
+
+ # raw data (demographic doc), 2815 observations
+df0 <- read_excel("../original/ncanda_all_sites_out_drkclss_20200617.xlsx")
+
+# print number of subjects per site
+df0 %>% select(c('subject','visit','drinking_class','site')) %>% pivot_wider(names_from = visit, values_from = drinking_class) %>% group_by(site) %>% summarise(n=n())
+
+ # NMF outputs, 2809 observations
+dfx <- read.csv("./11.03/NMF_k07_d20484_n2809.csv",header=T) %>% rename(folder = sbj) # 7-pattern solution
+#dfx <- read.csv("./11.03/NMF_k09_d20484_n2809.csv",header=T) %>% rename(folder = sbj) # 9-pattern solution
+
+# merge demo info & NMF outputs, 2809 observations
+df0 <- merge(df0,dfx,by="folder",all.y=T)
+
+
+# print number of subjects per site
+df0 %>% select(c('subject','visit','drinking_class','site')) %>% pivot_wider(names_from = visit, values_from = drinking_class) %>% group_by(site) %>% summarise(n=n())
+
+ # print number of subjects per drinking_class level at baseline
+df0 %>% select(c('subject','visit','drinking_class')) %>% pivot_wider(names_from = visit, values_from = drinking_class) %>% group_by(baseline) %>% summarise(n=n())
+
+
+# Only keep those drinking_class = 0 at baseline, 657 subjects
+df1 <- df0 %>% select(c('subject','visit','drinking_class')) %>% pivot_wider(names_from = visit, values_from = drinking_class) %>% filter(baseline==0) # keep those with drinking_class=0 at baseline
+
+# 657 subjects correspond to 2628 observations
+df1 <- df1 %>% pivot_longer(-subject, names_to = "visit", values_to = "drinking_class")
+
+# final data for analyses, 2628 observations
+df <- merge(df0,df1,by=c("subject","visit"),all.y=T) %>% rename(drinking_class=drinking_class.y) 
+
+# total individual study visits with drinking_class values, 2253 observations
+df %>% summarise(n=n())
+
+# calculate age_m & age_d
+df1 <- df %>% select(c('subject','visit','mri_t1_age')) %>% pivot_wider(names_from = visit, values_from = mri_t1_age) %>% mutate(subject_mean_age = rowMeans(select(., baseline:followup_3y),na.rm=T), age_m = subject_mean_age - mean(subject_mean_age), baseline=baseline-subject_mean_age, followup_1y=followup_1y-subject_mean_age, followup_2y=followup_2y-subject_mean_age, followup_3y=followup_3y-subject_mean_age) # calculate subject_mean_age, age_m and age_d (values are in each of visits)
+
+# add age_d to df
+dfx <- df1 %>% select(subject:followup_3y) %>% pivot_longer(-subject, names_to = "visit", values_to = "age_d") # turn to long table
+df <- merge(df,dfx,by=c("subject","visit"),all.y=T) 
+
+# add age_m to df
+dfx <- df1 %>% mutate(baseline=age_m, followup_1y=age_m, followup_2y=age_m, followup_3y=age_m) %>% select(subject:followup_3y) %>% pivot_longer(-subject, names_to = "visit", values_to = "age_m") # turn to long table
+df <- merge(df,dfx,by=c("subject","visit"),all.y=T)
+
+# total individual study visits, 2628 observations
+df %>% summarise(n=n())
+
+# total individual study visits with drinking_class values, 2253 observations
+df %>% filter(drinking_class>=0) %>% summarise(n=n())
+
+```
+
+# Statistical Analyses
+
+
+
+## (0) Demographic and clinical Info
+
+### (0.1) summarise
+```{r,echo=FALSE,warning=FALSE}
+# Raw data
+par(mfrow=c(2,4))
+hist(df$age_m,las=1,main="Age_m",xlab=NULL,ylab="Count")
+hist(df$age_d,las=1,main="Age_d",xlab=NULL,ylab="Count")
+hist(df$drinking_class,las=1,main="Drinking_class",xlab=NULL,ylab="Count")
+barplot(table(df$sex),space=0.3,col="white",las=1,main="Sex",xlab=NULL,ylab="Count")
+barplot(table(df$race_label),horiz=F,col="white",las=2,main="Race",xlab=NULL,ylab="Count",na.action=T)
+hist(df$ses,las=1,main="Ses",xlab=NULL,ylab="Count")
+hist(df$fh_alc_density,las=1,main="fh_alc_density",xlab=NULL,ylab="Count")
+hist(df$life_trauma_RP,las=1,main="Life_trauma",xlab=NULL,ylab="Count")
+
+
+# Log10() transformed data (suggested by Raj)
+par(mfrow=c(2,3))
+hist(df$ses,las=1,main="Ses",xlab=NULL,ylab="Count")
+hist(df$fh_alc_density,las=1,main="fh_alc_density",xlab=NULL,ylab="Count")
+hist(df$life_trauma_RP,las=1,main="Life_trauma",xlab=NULL,ylab="Count")
+
+hist(log10(df$ses),las=1,main="log10(Ses)",xlab=NULL,ylab="Count")
+hist(log10(df$fh_alc_density),las=1,main="log10(df$fh_alc_density)",xlab=NULL,ylab="Count")
+hist(log10(df$life_trauma_RP),las=1,main="log10(Life_trauma)",xlab=NULL,ylab="Count")
+
+# Transformed data (suggested by Mike)
+# race info by Mike
+df_race <- read.csv("NCANDA_raceEdata.csv",header=T) %>% mutate(subject=ID,baseline=race3,followup_1y=race3,followup_2y=race3,followup_3y=race3) %>% select(c("subject","baseline","followup_1y","followup_2y","followup_3y")) %>% pivot_longer(-subject, names_to = "visit", values_to = "race_label")
+df <- merge(df,df_race,by=c("subject","visit"),all.x=T) %>% rename(race_label=race_label.y)
+
+df <- df %>% mutate(drinking_class = replace(drinking_class,drinking_class==3,2))
+df <- df %>% mutate(ses = replace(ses,ses<=12,0)) %>% mutate(ses = replace(ses,ses>12,1))
+df <- df %>% mutate(life_trauma_RP = replace(life_trauma_RP,life_trauma_RP==5,4))
+df <- df %>% mutate(race_label = str_replace_all(race_label,c("Caucasian/White"="Cauc","African-American/Black"="AAmer","other"="Other")))
+
+par(mfrow=c(2,4))
+hist(df$age_m,las=1,main="Age_m",xlab=NULL,ylab="Count")
+hist(df$age_d,las=1,main="Age_d",xlab=NULL,ylab="Count")
+hist(df$drinking_class,las=1,main="Drinking_class",xlab=NULL,ylab="Count")
+barplot(table(df$sex),space=0.3,col="white",las=1,main="Sex",xlab=NULL,ylab="Count")
+barplot(table(df$race_label),horiz=F,col="white",las=2,main="Race",xlab=NULL,ylab="Count",na.action=T)
+hist(df$ses,las=1,main="Ses",xlab=NULL,ylab="Count")
+hist(df$fh_alc_density,las=1,main="fh_alc_density",xlab=NULL,ylab="Count")
+hist(df$life_trauma_RP,las=1,main="Life_trauma",xlab=NULL,ylab="Count")
+
+print("Number of subjects grouped by drinking_class")
+df %>% filter(visit=="baseline") %>% select(drinking_class) %>% group_by(drinking_class) %>% summarise(n=n())
+print("Number of subjects grouped by ses")
+df %>% filter(visit=="baseline") %>% select(ses) %>% group_by(ses) %>% summarise(n=n())
+
+```
+
+
+#Table 1.
+```{r,echo=FALSE}
+# number of subjects
+dfx <- df %>% select(c('subject','visit','drinking_class')) %>% pivot_wider(names_from = visit, values_from = drinking_class) %>% filter(baseline==0) # 657 subjects with baseline drinking_class=0
+dfx %>% summarise(n=n())
+dfx %>% filter(followup_1y>=0) %>% summarise(n=n()) # 576 subjects in followup_1y
+dfx %>% filter(followup_2y>=0) %>% summarise(n=n()) # 536 subjects in followup_2y
+dfx %>% filter(followup_3y>=0) %>% summarise(n=n()) # 484 subjects in followup_3y
+ 
+# number of subjects per drinking_class per visit
+dfx <- df %>% select(c('subject','visit','drinking_class')) %>% pivot_wider(names_from = visit, values_from = drinking_class) %>% filter(baseline==0) # 657 subjects with baseline drinking_class=0
+dfx %>% select('baseline') %>% table()
+dfx %>% select('followup_1y') %>% table()
+dfx %>% select('followup_2y') %>% table()
+dfx %>% select('followup_3y') %>% table()
+
+# number of subjects per sex
+dfx <- df %>% select(c('subject','visit','drinking_class','sex')) %>% pivot_wider(names_from = visit, values_from = c(drinking_class,sex)) %>% filter(drinking_class_baseline==0) # 657 subjects with baseline drinking_class=0
+dfx %>% group_by(sex_baseline) %>% summarise(n=n())
+dfx %>% filter(drinking_class_followup_1y>=0) %>% group_by(sex_followup_1y) %>% summarise(n=n()) 
+dfx %>% filter(drinking_class_followup_2y>=0) %>% group_by(sex_followup_2y) %>% summarise(n=n()) 
+dfx %>% filter(drinking_class_followup_3y>=0) %>% group_by(sex_followup_3y) %>% summarise(n=n()) 
+ 
+# number of subjects per race_label
+dfx <- df %>% select(c('subject','visit','drinking_class','race_label')) %>% pivot_wider(names_from = visit, values_from = c(drinking_class,race_label)) %>% filter(drinking_class_baseline==0) # 657 subjects with baseline drinking_class=0
+dfx %>% group_by(race_label_baseline) %>% summarise(n=n())
+dfx %>% filter(drinking_class_followup_1y>=0) %>% group_by(race_label_followup_1y) %>% summarise(n=n()) 
+dfx %>% filter(drinking_class_followup_2y>=0) %>% group_by(race_label_followup_2y) %>% summarise(n=n()) 
+dfx %>% filter(drinking_class_followup_3y>=0) %>% group_by(race_label_followup_3y) %>% summarise(n=n()) 
+#dfx <- df %>% select(c('subject','visit','drinking_class','race_label')) %>% pivot_wider(names_from = visit, values_from = c(drinking_class,race_label)) %>% filter(drinking_class_baseline==0) 
+#SDL_calc <- function(col){col %>% as.factor() %>% table(useNA="no")}
+#dfx %>% select("race_label_baseline":"race_label_followup_3y") %>% sapply(SDL_calc) # works for number of subjects
+#dfx$race_label_followup_3y %>% base::table(exclude=c(NA,NaN),useNA="no")
+ 
+# age per visit
+dfx <- df %>% select(c('subject','visit','drinking_class','mri_t1_age')) %>% pivot_wider(names_from = visit, values_from = c(drinking_class,mri_t1_age)) %>% filter(drinking_class_baseline==0)
+dfx %>% select(mri_t1_age_baseline:mri_t1_age_followup_3y) %>% summarise_all(list(~mean(.,na.rm=TRUE),~sd(.,na.rm=TRUE)))
+ 
+# SES per visit
+dfx <- df %>% select(c('subject','visit','drinking_class','ses')) %>% pivot_wider(names_from = visit, values_from = c(drinking_class,ses)) %>% filter(drinking_class_baseline==0) # 657 subjects with baseline drinking_class=0
+dfx %>% group_by(ses_baseline) %>% summarise(n=n())
+dfx %>% filter(drinking_class_followup_1y>=0) %>% group_by(ses_followup_1y) %>% summarise(n=n()) 
+dfx %>% filter(drinking_class_followup_2y>=0) %>% group_by(ses_followup_2y) %>% summarise(n=n()) 
+dfx %>% filter(drinking_class_followup_3y>=0) %>% group_by(ses_followup_3y) %>% summarise(n=n()) 
+ 
+# fh_alc_density per visit
+dfx <- df %>% select(c('subject','visit','drinking_class','fh_alc_density')) %>% pivot_wider(names_from = visit, values_from = c(drinking_class,fh_alc_density)) %>% filter(drinking_class_baseline==0)
+dfx %>% select(fh_alc_density_baseline:fh_alc_density_followup_3y) %>% summarise_all(list(~mean(.,na.rm=TRUE),~sd(.,na.rm=TRUE))) 
+ 
+# life_trauma per visit
+dfx <- df %>% select(c('subject','visit','drinking_class','life_trauma_RP')) %>% pivot_wider(names_from = visit, values_from = c(drinking_class,life_trauma_RP)) %>% filter(drinking_class_baseline==0)
+dfx %>% select(life_trauma_RP_baseline:life_trauma_RP_followup_3y) %>% summarise_all(list(~mean(.,na.rm=TRUE),~sd(.,na.rm=TRUE))) 
+
+```
+
+# Supplementary Table 1.
+```{r,echo=FALSE}
+# number of subjects
+dfx <- df %>% select(c('subject','visit','drinking_class','site')) %>% pivot_wider(names_from = visit, values_from = drinking_class) %>% filter(baseline==0) # 653 subjects with baseline drinking_class=0
+dfx %>% group_by(site) %>% summarise(n=n())
+
+# number of subjects per sex
+dfx <- df %>% select(c('subject','visit','drinking_class','site','sex')) %>% pivot_wider(names_from = visit, values_from = c(drinking_class,sex)) %>% filter(drinking_class_baseline==0) # 653 subjects with baseline drinking_class=0
+dfx %>% group_by(site,sex_baseline) %>% summarise(n=n())
+ 
+# age at baseline
+dfx <- df %>% select(c('subject','visit','drinking_class','mri_t1_age','site')) %>% pivot_wider(names_from = visit, values_from = c(drinking_class,mri_t1_age)) %>% filter(drinking_class_baseline==0)
+dfx %>% select(c(site,mri_t1_age_baseline)) %>% group_by(site) %>%  summarise_all(list(~mean(.,na.rm=TRUE),~sd(.,na.rm=TRUE)))
+
+# number of subjects per race_label at baseline
+dfx <- df %>% select(c('subject','visit','drinking_class','race_label','site')) %>% pivot_wider(names_from = visit, values_from = c(drinking_class,race_label)) %>% filter(drinking_class_baseline==0) # 653 subjects with baseline drinking_class=0
+dfx %>% group_by(site,race_label_baseline) %>% summarise(n=n())
+
+ 
+# SES at baseline
+dfx <- df %>% select(c('subject','visit','drinking_class','ses','site')) %>% pivot_wider(names_from = visit, values_from = c(drinking_class,ses)) %>% filter(drinking_class_baseline==0) # 653 subjects with baseline drinking_class=0
+dfx %>% group_by(site,ses_baseline) %>% summarise(n=n())
+ 
+ 
+# fh_alc_density at baseline
+dfx <- df %>% select(c('subject','visit','drinking_class','fh_alc_density','site')) %>% pivot_wider(names_from = visit, values_from = c(drinking_class,fh_alc_density)) %>% filter(drinking_class_baseline==0)
+dfx %>% select(c(site,fh_alc_density_baseline)) %>% group_by(site) %>% summarise_all(list(~mean(.,na.rm=TRUE),~sd(.,na.rm=TRUE))) 
+ 
+# life_trauma at baseline
+dfx <- df %>% select(c('subject','visit','drinking_class','life_trauma_RP','site')) %>% pivot_wider(names_from = visit, values_from = c(drinking_class,life_trauma_RP)) %>% filter(drinking_class_baseline==0)
+dfx %>% select(c(site,life_trauma_RP_baseline)) %>% group_by(site) %>% summarise_all(list(~mean(.,na.rm=TRUE),~sd(.,na.rm=TRUE))) 
+
+```
+
+
+
+
+
+## (1) Main effect of drinking class, age_m and age_d
+
+### (1.1) main effect of drinking_class
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_m + age_d + drinking_class + sex + race_label + ses + fh_alc_density + life_trauma_RP + (1|subject))" # defined by the user
+
+# all functions
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("drinking_class"),fxy=c("Drinking Class","Cortical Thickness"),ffact='drinking_class')
+
+# coefficients
+coefs <- df %>% select(c1:c7) %>% sapply(SDL_lm, df=df, Otype="coef", ftxt=ftxt) #coefs is a list of matrix
+
+# coefficients of interest
+coef_inter <- coefs %>% do.call(rbind,.) %>% .[which(rownames(.)=="drinking_class"),] %>% as.data.frame() %>% mutate(p_fdr=p.adjust(.[,"Pr(>|t|)"],method="fdr"))
+row.names(coef_inter) <- sprintf('c%02d',1:7)
+
+coef_inter 
+
+```
+
+### (1.2) main effect of age_d
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_m + age_d + drinking_class + sex + race_label + ses + fh_alc_density + life_trauma_RP + (1|subject))" # defined by the user
+
+# all functions
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("age_d"),fxy=c("age_d","Mean Value"),ffact='age_d')
+
+# coefficients
+coefs <- df %>% select(c1:c7) %>% sapply(SDL_lm, df=df, Otype="coef", ftxt=ftxt) #coefs is a list of matrix
+
+# coefficients of interest
+coef_inter <- coefs %>% do.call(rbind,.) %>% .[which(rownames(.)=="age_d"),] %>% as.data.frame() %>% mutate(p_fdr=p.adjust(.[,"Pr(>|t|)"],method="fdr"))
+row.names(coef_inter) <- sprintf('c%02d',1:7)
+
+coef_inter 
+
+```
+
+
+### (1.3) main effect of age_m
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_m + age_d + drinking_class + sex + race_label + ses + fh_alc_density + life_trauma_RP + (1|subject))" # defined by the user
+
+# all functions
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("age_m"),fxy=c("age_m","Mean Value"),ffact='age_m')
+
+# coefficients
+coefs <- df %>% select(c1:c7) %>% sapply(SDL_lm, df=df, Otype="coef", ftxt=ftxt) #coefs is a list of matrix
+
+# coefficients of interest
+coef_inter <- coefs %>% do.call(rbind,.) %>% .[which(rownames(.)=="age_m"),] %>% as.data.frame() %>% mutate(p_fdr=p.adjust(.[,"Pr(>|t|)"],method="fdr"))
+row.names(coef_inter) <- sprintf('c%02d',1:7)
+
+coef_inter 
+
+```
+
+
+
+## (2) Two-way interactions of drinking class and the other fixed variables
+
+## (2.1) drinking class x age_d interaction
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_m + age_d * drinking_class + sex + race_label + ses + fh_alc_density + life_trauma_RP + (1|subject))" # defined by the user
+
+# all functions
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("age_d","drinking_class"),fxy=c("Within-Person Age Change (Years)","Mean Value"),ffact='age_d:drinking_class')
+
+# coefficients
+coefs <- df %>% select(c1:c7) %>% sapply(SDL_lm, df=df, Otype="coef", ftxt=ftxt) #coefs is a list of matrix
+
+# coefficients of interest
+coef_inter <- coefs %>% do.call(rbind,.) %>% .[which(rownames(.)=="age_d:drinking_class"),] %>% as.data.frame() %>% mutate(p_fdr=p.adjust(.[,"Pr(>|t|)"],method="fdr"))
+row.names(coef_inter) <- sprintf('c%02d',1:7)
+
+coef_inter
+
+```
+
+
+
+
+
+## (2.2) drinking class x age_m interaction
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_d + age_m * drinking_class + sex + race_label + ses + fh_alc_density + life_trauma_RP + (1|subject))" # defined by the user
+
+# all functions
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("age_m","drinking_class"),fxy=c("age_m","Mean Value"),ffact='age_m:drinking_class')
+
+# coefficients
+coefs <- df %>% select(c1:c7) %>% sapply(SDL_lm, df=df, Otype="coef", ftxt=ftxt) #coefs is a list of matrix
+
+# coefficients of interest
+coef_inter <- coefs %>% do.call(rbind,.) %>% .[which(rownames(.)=="age_m:drinking_class"),] %>% as.data.frame() %>% mutate(p_fdr=p.adjust(.[,"Pr(>|t|)"],method="fdr"))
+row.names(coef_inter) <- sprintf('c%02d',1:7)
+
+coef_inter
+
+```
+
+
+## (2.3) age_d x age_m interaction
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_d * age_m + drinking_class + sex + race_label + ses + fh_alc_density + life_trauma_RP + (1|subject))" # defined by the user
+
+# all functions
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("age_d","age_m"),fxy=c("age_d","Mean Value"),ffact='age_d:age_m')
+
+# coefficients
+coefs <- df %>% select(c1:c7) %>% sapply(SDL_lm, df=df, Otype="coef", ftxt=ftxt) #coefs is a list of matrix
+
+# coefficients of interest
+coef_inter <- coefs %>% do.call(rbind,.) %>% .[which(rownames(.)=="age_d:age_m"),] %>% as.data.frame() %>% mutate(p_fdr=p.adjust(.[,"Pr(>|t|)"],method="fdr"))
+row.names(coef_inter) <- sprintf('c%02d',1:7)
+
+coef_inter
+
+```
+
+## (2.4) drinking class x life_trauma interaction
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_d + age_m + drinking_class * life_trauma_RP + sex + race_label + ses + fh_alc_density + (1|subject))" # defined by the user
+
+# all functions
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("drinking_class","life_trauma_RP"),fxy=c("Drinking Class","Mean Value"),ffact='drinking_class:life_trauma_RP')
+
+# coefficients
+coefs <- df %>% select(c1:c7) %>% sapply(SDL_lm, df=df, Otype="coef", ftxt=ftxt) #coefs is a list of matrix
+
+# coefficients of interest
+coef_inter <- coefs %>% do.call(rbind,.) %>% .[which(rownames(.)=="drinking_class:life_trauma_RP"),] %>% as.data.frame() %>% mutate(p_fdr=p.adjust(.[,"Pr(>|t|)"],method="fdr"))
+row.names(coef_inter) <- sprintf('c%02d',1:7)
+
+coef_inter
+
+```
+
+## (2.5) drinking class x sex interaction
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_d + age_m + drinking_class * sex + life_trauma_RP + race_label + ses + fh_alc_density + (1|subject))" # defined by the user
+
+# all functions
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("drinking_class","sex"),fxy=c("Drinking Class","Mean Value"),ffact='drinking_class:sexM')
+
+# coefficients
+coefs <- df %>% select(c1:c7) %>% sapply(SDL_lm, df=df, Otype="coef", ftxt=ftxt) #coefs is a list of matrix
+
+# coefficients of interest
+coef_inter <- coefs %>% do.call(rbind,.) %>% .[which(rownames(.)=="drinking_class:sexM"),] %>% as.data.frame() %>% mutate(p_fdr=p.adjust(.[,"Pr(>|t|)"],method="fdr"))
+row.names(coef_inter) <- sprintf('c%02d',1:7)
+
+coef_inter
+
+```
+
+
+## (2.6) drinking class x rae_label interaction
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_d + age_m + drinking_class * race_label + sex + life_trauma_RP + ses + fh_alc_density + (1|subject))" # defined by the user
+
+# all functions
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("drinking_class","race_label"),fxy=c("Drinking Class","Mean Value"),ffact='drinking_class:race_labelCauc')
+
+# coefficients
+coefs <- df %>% select(c1:c7) %>% sapply(SDL_lm, df=df, Otype="coef", ftxt=ftxt) #coefs is a list of matrix
+
+# coefficients of interest
+coef_inter <- coefs %>% do.call(rbind,.) %>% .[which(rownames(.)=="drinking_class:race_labelCauc"),] %>% as.data.frame() %>% mutate(p_fdr=p.adjust(.[,"Pr(>|t|)"],method="fdr"))
+row.names(coef_inter) <- sprintf('c%02d',1:7)
+
+coef_inter
+
+```
+
+
+
+## (2.7) drinking class x ses interaction
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_d + age_m + drinking_class * ses + race_label + sex + life_trauma_RP + fh_alc_density + (1|subject))" # defined by the user
+
+# all functions
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("drinking_class","ses"),fxy=c("Drinking Class","Mean Value"),ffact='drinking_class:ses')
+
+# coefficients
+coefs <- df %>% select(c1:c7) %>% sapply(SDL_lm, df=df, Otype="coef", ftxt=ftxt) #coefs is a list of matrix
+
+# coefficients of interest
+coef_inter <- coefs %>% do.call(rbind,.) %>% .[which(rownames(.)=="drinking_class:ses"),] %>% as.data.frame() %>% mutate(p_fdr=p.adjust(.[,"Pr(>|t|)"],method="fdr"))
+row.names(coef_inter) <- sprintf('c%02d',1:7)
+
+coef_inter
+
+```
+
+
+## (2.8) drinking class x fh_alc_density interaction
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_d + age_m + drinking_class * fh_alc_density + ses + race_label + sex + life_trauma_RP + (1|subject))" # defined by the user
+
+# all functions
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("drinking_class","fh_alc_density"),fxy=c("Drinking Class","Mean Value"),ffact='drinking_class:fh_alc_density')
+
+# coefficients
+coefs <- df %>% select(c1:c7) %>% sapply(SDL_lm, df=df, Otype="coef", ftxt=ftxt) #coefs is a list of matrix
+
+# coefficients of interest
+coef_inter <- coefs %>% do.call(rbind,.) %>% .[which(rownames(.)=="drinking_class:fh_alc_density"),] %>% as.data.frame() %>% mutate(p_fdr=p.adjust(.[,"Pr(>|t|)"],method="fdr"))
+row.names(coef_inter) <- sprintf('c%02d',1:7)
+
+coef_inter
+
+```
+
+
+
+
+## (3) 3-Way Interactions
+
+## (3.1) age_d x age_m x drinking_class interaction (with 2-way interactions)
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_d * age_m * drinking_class + sex + race_label + ses + fh_alc_density + life_trauma_RP + (1|subject))" # !!! defined by the user
+
+# all functions
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("age_d","age_m","drinking_class"),fxy=c("Within-Person Age Change (Years)","Mean Value"),ffact='age_d:age_m:drinking_class')
+
+# coefficients
+coefs <- df %>% select(c1:c7) %>% sapply(SDL_lm, df=df, Otype="coef", ftxt=ftxt) #coefs is a list of matrix
+
+# coefficients of interest
+coef_inter <- coefs %>% do.call(rbind,.) %>% .[which(rownames(.)=="age_d:age_m:drinking_class"),] %>% as.data.frame() %>% mutate(p_fdr=p.adjust(.[,"Pr(>|t|)"],method="fdr"))
+row.names(coef_inter) <- sprintf('c%02d',1:7)
+
+coef_inter
+```
+
+## (3.2) age_d x age_m x drinking_class interaction (without 2-way interactions)
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_d:age_m:drinking_class + age_d + age_m + drinking_class + sex + race_label + ses + fh_alc_density + life_trauma_RP + (1|subject))" # !!! defined by the user
+
+# all functions
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("age_d","age_m","drinking_class"),fxy=c("age_d","Mean Value"),ffact='age_d:age_m:drinking_class')
+
+# coefficients
+coefs <- df %>% select(c1:c7) %>% sapply(SDL_lm, df=df, Otype="coef", ftxt=ftxt) #coefs is a list of matrix
+
+# coefficients of interest
+coef_inter <- coefs %>% do.call(rbind,.) %>% .[which(rownames(.)=="age_d:age_m:drinking_class"),] %>% as.data.frame() %>% mutate(p_fdr=p.adjust(.[,"Pr(>|t|)"],method="fdr"))
+row.names(coef_inter) <- sprintf('c%02d',1:7)
+
+coef_inter
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+# (2) Effects of life_trauma
+
+## (2.1) life_trauma main effect
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_m + age_d + drinking_class + life_trauma_RP + sex + race_label + ses + fh_alc_density + (1|subject))" # !!! defined by the user
+
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("life_trauma_RP"),fxy=c("Life_trauma","Mean Value"),ffact='life_trauma_RP')
+
+```
+
+
+
+## (2.2) age_m x life_trauma interaction
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_d + drinking_class + age_m * life_trauma_RP + sex + race_label + ses + fh_alc_density + (1|subject))" # !!! defined by the user
+
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("age_m","life_trauma_RP"),fxy=c("Age_m","Mean Value"),ffact='age_m:life_trauma_RP')
+
+```
+
+
+
+
+## (2.3) age_d x life_trauma interaction
+```{r,echo=FALSE}
+# define model formula
+ftxt <- "lmer(formula = y ~ age_m + drinking_class + age_d * life_trauma_RP + sex + race_label + ses + fh_alc_density + (1|subject))" # !!! defined by the user
+
+df %>% select(c1:c7) %>% SDL_all(df=df,fcorr='fdr',ftxt=ftxt,fterms=c("age_d","life_trauma_RP"),fxy=c("Age_d","Mean Value"),ffact='age_d:life_trauma_RP')
+
+```
