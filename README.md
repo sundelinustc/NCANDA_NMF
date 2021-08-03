@@ -1,4 +1,5 @@
 # NCANDA_NMF
+![alt text](https://github.com/sundelinustc/NCANDA_NMF/blob/main/Figure1.png?raw=true)
 ## Objective 
 Cortical thickness changes dramatically during development and is influenced by adolescent drinking. However, previous findings have been inconsistent and limited by region-of-interest approaches that are underpowered because they do not conform to the underlying heterogeneity from the effects of alcohol. 
 ## Methods 
